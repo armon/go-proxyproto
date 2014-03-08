@@ -68,6 +68,9 @@ func NewConn(conn net.Conn) *Conn {
 	return pConn
 }
 
+// Read is check for the proxy protocol header when doing
+// the initial scan. If there is an error parsing the header,
+// it is returned and the socket is closed.
 func (p *Conn) Read(b []byte) (int, error) {
 	var err error
 	p.once.Do(func() { err = p.checkPrefix() })
@@ -89,6 +92,13 @@ func (p *Conn) LocalAddr() net.Addr {
 	return p.conn.LocalAddr()
 }
 
+// RemoteAddr returns the address of the client if the proxy
+// protocol is being used, otherwise just returns the address of
+// the socket peer. If there is an error parsing the header, the
+// address of the client is not returned, and the socket is closed.
+// Once implication of this is that the call could block if the
+// client is slow. Using a Deadline is recommended if this is called
+// before Read()
 func (p *Conn) RemoteAddr() net.Addr {
 	p.once.Do(func() {
 		if err := p.checkPrefix(); err != nil {
