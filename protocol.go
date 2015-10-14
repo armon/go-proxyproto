@@ -1,11 +1,12 @@
+// Package proxoproto implements a net.Listener supporting HAProxy PROTO protocol.
+//
+// See http://www.haproxy.org/download/1.5/doc/proxy-protocol.txt for details.
 package proxyproto
 
 import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"io"
-	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -13,25 +14,29 @@ import (
 	"time"
 )
 
-var (
-	// prefix is the string we look for at the start of a connection
-	// to check if this connection is using the proxy protocol
-	prefix    = []byte("PROXY ")
-	prefixLen = len(prefix)
-)
+// prefix is the string we look for at the start of a connection
+// to check if this connection is using the proxy protocol.
+var prefix = []byte("PROXY ")
 
-// Listener is used to wrap an underlying listener,
-// whose connections may be using the HAProxy Proxy Protocol (version 1).
-// If the connection is using the protocol, the RemoteAddr() will return
-// the correct client address.
+// Listener wraps an underlying listener whose connections may be
+// using the HAProxy Proxy Protocol (version 1).
+// If the connection is using the protocol, RemoteAddr will return the
+// correct client address.
 type Listener struct {
 	Listener net.Listener
+
+	initOnce sync.Once        // guards init, which sets the following:
+	connc    chan interface{} // *conn or error
 }
 
-// Conn is used to wrap and underlying connection which
+func (p *Listener) init() {
+	p.connc = make(chan interface{})
+}
+
+// conn is used to wrap and underlying connection which
 // may be speaking the Proxy Protocol. If it is, the RemoteAddr() will
 // return the address of the client instead of the proxy address.
-type Conn struct {
+type conn struct {
 	bufReader *bufio.Reader
 	conn      net.Conn
 	dstAddr   *net.TCPAddr
@@ -41,38 +46,49 @@ type Conn struct {
 
 // Accept waits for and returns the next connection to the listener.
 func (p *Listener) Accept() (net.Conn, error) {
+	p.initOnce.Do(p.init)
 	// Get the underlying connection
-	conn, err := p.Listener.Accept()
+	rawc, err := p.Listener.Accept()
 	if err != nil {
 		return nil, err
 	}
-	return NewConn(conn), nil
+	go func() {
+		c, err := newConn(rawc)
+		if err != nil {
+			p.connc <- err
+		} else {
+			p.connc <- c
+		}
+	}()
+	v := <-p.connc
+	if c, ok := v.(*conn); ok {
+		return c, nil
+	} else {
+		return nil, v.(error)
+	}
 }
 
 // Close closes the underlying listener.
-func (p *Listener) Close() error {
-	return p.Listener.Close()
-}
+func (p *Listener) Close() error { return p.Listener.Close() }
 
 // Addr returns the underlying listener's network address.
-func (p *Listener) Addr() net.Addr {
-	return p.Listener.Addr()
-}
+func (p *Listener) Addr() net.Addr { return p.Listener.Addr() }
 
-// NewConn is used to wrap a net.Conn that may be speaking
-// the proxy protocol into a proxyproto.Conn
-func NewConn(conn net.Conn) *Conn {
-	pConn := &Conn{
-		bufReader: bufio.NewReader(conn),
-		conn:      conn,
+func newConn(c net.Conn) (*conn, error) {
+	pc := &conn{
+		bufReader: bufio.NewReader(c),
+		conn:      c,
 	}
-	return pConn
+	if err := pc.checkPrefix(); err != nil {
+		return nil, err
+	}
+	return pc, nil
 }
 
 // Read is check for the proxy protocol header when doing
 // the initial scan. If there is an error parsing the header,
 // it is returned and the socket is closed.
-func (p *Conn) Read(b []byte) (int, error) {
+func (p *conn) Read(b []byte) (int, error) {
 	var err error
 	p.once.Do(func() { err = p.checkPrefix() })
 	if err != nil {
@@ -81,15 +97,15 @@ func (p *Conn) Read(b []byte) (int, error) {
 	return p.bufReader.Read(b)
 }
 
-func (p *Conn) Write(b []byte) (int, error) {
+func (p *conn) Write(b []byte) (int, error) {
 	return p.conn.Write(b)
 }
 
-func (p *Conn) Close() error {
+func (p *conn) Close() error {
 	return p.conn.Close()
 }
 
-func (p *Conn) LocalAddr() net.Addr {
+func (p *conn) LocalAddr() net.Addr {
 	return p.conn.LocalAddr()
 }
 
@@ -100,35 +116,25 @@ func (p *Conn) LocalAddr() net.Addr {
 // Once implication of this is that the call could block if the
 // client is slow. Using a Deadline is recommended if this is called
 // before Read()
-func (p *Conn) RemoteAddr() net.Addr {
-	p.once.Do(func() {
-		if err := p.checkPrefix(); err != nil && err != io.EOF {
-			log.Printf("[ERR] Failed to read proxy prefix: %v", err)
-		}
-	})
+func (p *conn) RemoteAddr() net.Addr {
 	if p.srcAddr != nil {
 		return p.srcAddr
 	}
 	return p.conn.RemoteAddr()
 }
 
-func (p *Conn) SetDeadline(t time.Time) error {
-	return p.conn.SetDeadline(t)
-}
+func (p *conn) SetDeadline(t time.Time) error      { return p.conn.SetDeadline(t) }
+func (p *conn) SetReadDeadline(t time.Time) error  { return p.conn.SetReadDeadline(t) }
+func (p *conn) SetWriteDeadline(t time.Time) error { return p.conn.SetWriteDeadline(t) }
 
-func (p *Conn) SetReadDeadline(t time.Time) error {
-	return p.conn.SetReadDeadline(t)
-}
-
-func (p *Conn) SetWriteDeadline(t time.Time) error {
-	return p.conn.SetWriteDeadline(t)
-}
-
-func (p *Conn) checkPrefix() error {
+func (p *conn) checkPrefix() error {
 	// Incrementally check each byte of the prefix
-	for i := 1; i <= prefixLen; i++ {
+	for i := 1; i <= len(prefix); i++ {
 		inp, err := p.bufReader.Peek(i)
 		if err != nil {
+			// TOOD: this isn't right. it returns EOF on
+			// non-PROXY connections sending payloads
+			// shorter than len(prefix).
 			return err
 		}
 

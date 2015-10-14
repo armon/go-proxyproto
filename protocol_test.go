@@ -12,8 +12,8 @@ func TestPassthrough(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-
-	pl := &Listener{l}
+	pl := &Listener{Listener: l}
+	defer pl.Close()
 
 	go func() {
 		conn, err := net.Dial("tcp", pl.Addr().String())
@@ -58,8 +58,8 @@ func TestParse_ipv4(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-
-	pl := &Listener{l}
+	pl := &Listener{Listener: l}
+	defer pl.Close()
 
 	go func() {
 		conn, err := net.Dial("tcp", pl.Addr().String())
@@ -117,8 +117,8 @@ func TestParse_ipv6(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-
-	pl := &Listener{l}
+	pl := &Listener{Listener: l}
+	defer pl.Close()
 
 	go func() {
 		conn, err := net.Dial("tcp", pl.Addr().String())
@@ -176,8 +176,8 @@ func TestParse_BadHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-
-	pl := &Listener{l}
+	pl := &Listener{Listener: l}
+	defer pl.Close()
 
 	go func() {
 		conn, err := net.Dial("tcp", pl.Addr().String())
