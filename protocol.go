@@ -104,6 +104,7 @@ func (p *Conn) RemoteAddr() net.Addr {
 	p.once.Do(func() {
 		if err := p.checkPrefix(); err != nil && err != io.EOF {
 			log.Printf("[ERR] Failed to read proxy prefix: %v", err)
+			p.Close()
 		}
 	})
 	if p.srcAddr != nil {
@@ -134,7 +135,7 @@ func (p *Conn) checkPrefix() error {
 
 		// Check for a prefix mis-match, quit early
 		if !bytes.Equal(inp, prefix[:i]) {
-			return nil
+			return fmt.Errorf("Invalid Proxy Protocol Header")
 		}
 	}
 
