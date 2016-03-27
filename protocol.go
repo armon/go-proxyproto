@@ -134,7 +134,7 @@ func (p *Conn) checkPrefix() error {
 
 		// Check for a prefix mis-match, quit early
 		if !bytes.Equal(inp, prefix[:i]) {
-			return nil
+			return fmt.Errorf("Invalid Proxy Protocol Header")
 		}
 	}
 
