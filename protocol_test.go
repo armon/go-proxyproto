@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"testing"
+	"time"
 )
 
 func TestPassthrough(t *testing.T) {
@@ -13,7 +14,7 @@ func TestPassthrough(t *testing.T) {
 		t.Fatalf("err: %v", err)
 	}
 
-	pl := &Listener{l}
+	pl := &Listener{Listener: l}
 
 	go func() {
 		conn, err := net.Dial("tcp", pl.Addr().String())
@@ -53,13 +54,77 @@ func TestPassthrough(t *testing.T) {
 	}
 }
 
+func TestTimeout(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	clientWriteDelay := 200 * time.Millisecond
+	proxyHeaderTimeout := 50 * time.Millisecond
+	pl := &Listener{Listener: l, ProxyHeaderTimeout: proxyHeaderTimeout}
+
+	go func() {
+		conn, err := net.Dial("tcp", pl.Addr().String())
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+		defer conn.Close()
+
+		// Do not send data for a while
+		time.Sleep(clientWriteDelay)
+
+		conn.Write([]byte("ping"))
+		recv := make([]byte, 4)
+		_, err = conn.Read(recv)
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+		if !bytes.Equal(recv, []byte("pong")) {
+			t.Fatalf("bad: %v", recv)
+		}
+	}()
+
+	conn, err := pl.Accept()
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	defer conn.Close()
+
+	// Check the remote addr is the original 127.0.0.1
+	remoteAddrStartTime := time.Now()
+	addr := conn.RemoteAddr().(*net.TCPAddr)
+	if addr.IP.String() != "127.0.0.1" {
+		t.Fatalf("bad: %v", addr)
+	}
+	remoteAddrDuration := time.Since(remoteAddrStartTime)
+
+	// Check RemoteAddr() call did timeout
+	if remoteAddrDuration >= clientWriteDelay {
+		t.Fatalf("RemoteAddr() took longer than the specified timeout: %v < %v", proxyHeaderTimeout, remoteAddrDuration)
+	}
+
+	recv := make([]byte, 4)
+	_, err = conn.Read(recv)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if !bytes.Equal(recv, []byte("ping")) {
+		t.Fatalf("bad: %v", recv)
+	}
+
+	if _, err := conn.Write([]byte("pong")); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+}
+
 func TestParse_ipv4(t *testing.T) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
 
-	pl := &Listener{l}
+	pl := &Listener{Listener: l}
 
 	go func() {
 		conn, err := net.Dial("tcp", pl.Addr().String())
@@ -118,7 +183,7 @@ func TestParse_ipv6(t *testing.T) {
 		t.Fatalf("err: %v", err)
 	}
 
-	pl := &Listener{l}
+	pl := &Listener{Listener: l}
 
 	go func() {
 		conn, err := net.Dial("tcp", pl.Addr().String())
@@ -177,7 +242,7 @@ func TestParse_BadHeader(t *testing.T) {
 		t.Fatalf("err: %v", err)
 	}
 
-	pl := &Listener{l}
+	pl := &Listener{Listener: l}
 
 	go func() {
 		conn, err := net.Dial("tcp", pl.Addr().String())
