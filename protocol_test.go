@@ -2,7 +2,6 @@ package proxyproto
 
 import (
 	"bytes"
-	"io"
 	"net"
 	"testing"
 	"time"
@@ -259,7 +258,7 @@ func TestParse_BadHeader(t *testing.T) {
 
 		recv := make([]byte, 4)
 		_, err = conn.Read(recv)
-		if err != io.EOF {
+		if err == nil {
 			t.Fatalf("err: %v", err)
 		}
 	}()
