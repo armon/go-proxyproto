@@ -24,19 +24,24 @@ var (
 // whose connections may be using the HAProxy Proxy Protocol (version 1).
 // If the connection is using the protocol, the RemoteAddr() will return
 // the correct client address.
+//
+// Optionally define ProxyHeaderTimeout to set a maximum time to
+// receive the Proxy Protocol Header. Zero means no timeout.
 type Listener struct {
-	Listener net.Listener
+	Listener           net.Listener
+	ProxyHeaderTimeout time.Duration
 }
 
 // Conn is used to wrap and underlying connection which
 // may be speaking the Proxy Protocol. If it is, the RemoteAddr() will
 // return the address of the client instead of the proxy address.
 type Conn struct {
-	bufReader *bufio.Reader
-	conn      net.Conn
-	dstAddr   *net.TCPAddr
-	srcAddr   *net.TCPAddr
-	once      sync.Once
+	bufReader          *bufio.Reader
+	conn               net.Conn
+	dstAddr            *net.TCPAddr
+	srcAddr            *net.TCPAddr
+	once               sync.Once
+	proxyHeaderTimeout time.Duration
 }
 
 // Accept waits for and returns the next connection to the listener.
@@ -46,7 +51,7 @@ func (p *Listener) Accept() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewConn(conn), nil
+	return NewConn(conn, p.ProxyHeaderTimeout), nil
 }
 
 // Close closes the underlying listener.
@@ -61,10 +66,11 @@ func (p *Listener) Addr() net.Addr {
 
 // NewConn is used to wrap a net.Conn that may be speaking
 // the proxy protocol into a proxyproto.Conn
-func NewConn(conn net.Conn) *Conn {
+func NewConn(conn net.Conn, timeout time.Duration) *Conn {
 	pConn := &Conn{
-		bufReader: bufio.NewReader(conn),
-		conn:      conn,
+		bufReader:          bufio.NewReader(conn),
+		conn:               conn,
+		proxyHeaderTimeout: timeout,
 	}
 	return pConn
 }
@@ -104,6 +110,8 @@ func (p *Conn) RemoteAddr() net.Addr {
 	p.once.Do(func() {
 		if err := p.checkPrefix(); err != nil && err != io.EOF {
 			log.Printf("[ERR] Failed to read proxy prefix: %v", err)
+			p.Close()
+			p.bufReader = bufio.NewReader(p.conn)
 		}
 	})
 	if p.srcAddr != nil {
@@ -125,11 +133,22 @@ func (p *Conn) SetWriteDeadline(t time.Time) error {
 }
 
 func (p *Conn) checkPrefix() error {
+	if p.proxyHeaderTimeout != 0 {
+		readDeadLine := time.Now().Add(p.proxyHeaderTimeout)
+		p.conn.SetReadDeadline(readDeadLine)
+		defer p.conn.SetReadDeadline(time.Time{})
+	}
+
 	// Incrementally check each byte of the prefix
 	for i := 1; i <= prefixLen; i++ {
 		inp, err := p.bufReader.Peek(i)
+
 		if err != nil {
-			return err
+			if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
+				return nil
+			} else {
+				return err
+			}
 		}
 
 		// Check for a prefix mis-match, quit early
