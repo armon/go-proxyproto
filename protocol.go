@@ -2,22 +2,12 @@ package proxyproto
 
 import (
 	"bufio"
-	"bytes"
-	"fmt"
-	"io"
 	"log"
 	"net"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
-)
 
-var (
-	// prefix is the string we look for at the start of a connection
-	// to check if this connection is using the proxy protocol
-	prefix    = []byte("PROXY ")
-	prefixLen = len(prefix)
+	proto "github.com/pires/go-proxyproto"
 )
 
 // Listener is used to wrap an underlying listener,
@@ -38,8 +28,7 @@ type Listener struct {
 type Conn struct {
 	bufReader          *bufio.Reader
 	conn               net.Conn
-	dstAddr            *net.TCPAddr
-	srcAddr            *net.TCPAddr
+	header             *proto.Header
 	once               sync.Once
 	proxyHeaderTimeout time.Duration
 }
@@ -80,9 +69,14 @@ func NewConn(conn net.Conn, timeout time.Duration) *Conn {
 // it is returned and the socket is closed.
 func (p *Conn) Read(b []byte) (int, error) {
 	var err error
-	p.once.Do(func() { err = p.checkPrefix() })
+	p.once.Do(func() { err = p.checkHeader() })
 	if err != nil {
-		return 0, err
+		// If no proxy protocol header is present, the connection is still valid.
+		if err == proto.ErrNoProxyProtocol {
+			log.Printf("[WARN] Failed to read proxy protocol header: %v", err)
+		} else {
+			return 0, err
+		}
 	}
 	return p.bufReader.Read(b)
 }
@@ -108,14 +102,24 @@ func (p *Conn) LocalAddr() net.Addr {
 // before Read()
 func (p *Conn) RemoteAddr() net.Addr {
 	p.once.Do(func() {
-		if err := p.checkPrefix(); err != nil && err != io.EOF {
+		if err := p.checkHeader(); err != nil && err != proto.ErrNoProxyProtocol {
 			log.Printf("[ERR] Failed to read proxy prefix: %v", err)
 			p.Close()
 			p.bufReader = bufio.NewReader(p.conn)
 		}
 	})
-	if p.srcAddr != nil {
-		return p.srcAddr
+	if p.header != nil && p.header.Command.IsProxy() {
+		if p.header.TransportProtocol.IsStream() {
+			return &net.TCPAddr{
+				IP:   p.header.SourceAddress,
+				Port: int(p.header.SourcePort),
+			}
+		} else if p.header.TransportProtocol.IsDatagram() {
+			return &net.UDPAddr{
+				IP:   p.header.SourceAddress,
+				Port: int(p.header.SourcePort),
+			}
+		}
 	}
 	return p.conn.RemoteAddr()
 }
@@ -132,82 +136,19 @@ func (p *Conn) SetWriteDeadline(t time.Time) error {
 	return p.conn.SetWriteDeadline(t)
 }
 
-func (p *Conn) checkPrefix() error {
+func (p *Conn) checkHeader() (err error) {
 	if p.proxyHeaderTimeout != 0 {
 		readDeadLine := time.Now().Add(p.proxyHeaderTimeout)
 		p.conn.SetReadDeadline(readDeadLine)
 		defer p.conn.SetReadDeadline(time.Time{})
 	}
 
-	// Incrementally check each byte of the prefix
-	for i := 1; i <= prefixLen; i++ {
-		inp, err := p.bufReader.Peek(i)
-
-		if err != nil {
-			if neterr, ok := err.(net.Error); ok && neterr.Timeout() {
-				return nil
-			} else {
-				return err
-			}
-		}
-
-		// Check for a prefix mis-match, quit early
-		if !bytes.Equal(inp, prefix[:i]) {
-			return nil
-		}
+	// TODO golden hammer against blocking forever
+	if p.proxyHeaderTimeout == 0 {
+		p.proxyHeaderTimeout = 50 * time.Millisecond
 	}
 
-	// Read the header line
-	header, err := p.bufReader.ReadString('\n')
-	if err != nil {
-		p.conn.Close()
-		return err
-	}
+	p.header, err = proto.ReadTimeout(p.bufReader, p.proxyHeaderTimeout)
 
-	// Strip the carriage return and new line
-	header = header[:len(header)-2]
-
-	// Split on spaces, should be (PROXY <type> <src addr> <dst addr> <src port> <dst port>)
-	parts := strings.Split(header, " ")
-	if len(parts) != 6 {
-		p.conn.Close()
-		return fmt.Errorf("Invalid header line: %s", header)
-	}
-
-	// Verify the type is known
-	switch parts[1] {
-	case "TCP4":
-	case "TCP6":
-	default:
-		p.conn.Close()
-		return fmt.Errorf("Unhandled address type: %s", parts[1])
-	}
-
-	// Parse out the source address
-	ip := net.ParseIP(parts[2])
-	if ip == nil {
-		p.conn.Close()
-		return fmt.Errorf("Invalid source ip: %s", parts[2])
-	}
-	port, err := strconv.Atoi(parts[4])
-	if err != nil {
-		p.conn.Close()
-		return fmt.Errorf("Invalid source port: %s", parts[4])
-	}
-	p.srcAddr = &net.TCPAddr{IP: ip, Port: port}
-
-	// Parse out the destination address
-	ip = net.ParseIP(parts[3])
-	if ip == nil {
-		p.conn.Close()
-		return fmt.Errorf("Invalid destination ip: %s", parts[3])
-	}
-	port, err = strconv.Atoi(parts[5])
-	if err != nil {
-		p.conn.Close()
-		return fmt.Errorf("Invalid destination port: %s", parts[5])
-	}
-	p.dstAddr = &net.TCPAddr{IP: ip, Port: port}
-
-	return nil
+	return
 }
