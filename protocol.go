@@ -131,6 +131,11 @@ func (p *Conn) LocalAddr() net.Addr {
 	return p.conn.LocalAddr()
 }
 
+func (p *Conn) DstAddr() net.Addr {
+	p.checkPrefixOnce()
+	return p.dstAddr
+}
+
 // RemoteAddr returns the address of the client if the proxy
 // protocol is being used, otherwise just returns the address of
 // the socket peer. If there is an error parsing the header, the
@@ -139,13 +144,7 @@ func (p *Conn) LocalAddr() net.Addr {
 // client is slow. Using a Deadline is recommended if this is called
 // before Read()
 func (p *Conn) RemoteAddr() net.Addr {
-	p.once.Do(func() {
-		if err := p.checkPrefix(); err != nil && err != io.EOF {
-			log.Printf("[ERR] Failed to read proxy prefix: %v", err)
-			p.Close()
-			p.bufReader = bufio.NewReader(p.conn)
-		}
-	})
+	p.checkPrefixOnce()
 	if p.srcAddr != nil && !p.useConnRemoteAddr {
 		return p.srcAddr
 	}
@@ -162,6 +161,16 @@ func (p *Conn) SetReadDeadline(t time.Time) error {
 
 func (p *Conn) SetWriteDeadline(t time.Time) error {
 	return p.conn.SetWriteDeadline(t)
+}
+
+func (p *Conn) checkPrefixOnce() {
+	p.once.Do(func() {
+		if err := p.checkPrefix(); err != nil && err != io.EOF {
+			log.Printf("[ERR] Failed to read proxy prefix: %v", err)
+			p.Close()
+			p.bufReader = bufio.NewReader(p.conn)
+		}
+	})
 }
 
 func (p *Conn) checkPrefix() error {
