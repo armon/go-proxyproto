@@ -48,6 +48,7 @@ type Listener struct {
 	Listener           net.Listener
 	ProxyHeaderTimeout time.Duration
 	SourceCheck        SourceChecker
+	Required           bool
 }
 
 // Conn is used to wrap and underlying connection which
@@ -61,6 +62,7 @@ type Conn struct {
 	useConnRemoteAddr  bool
 	once               sync.Once
 	proxyHeaderTimeout time.Duration
+	required           bool
 }
 
 // Accept waits for and returns the next connection to the listener.
@@ -82,6 +84,7 @@ func (p *Listener) Accept() (net.Conn, error) {
 	}
 	newConn := NewConn(conn, p.ProxyHeaderTimeout)
 	newConn.useConnRemoteAddr = useConnRemoteAddr
+	newConn.required = p.Required
 	return newConn, nil
 }
 
@@ -184,6 +187,9 @@ func (p *Conn) checkPrefix() error {
 
 		// Check for a prefix mis-match, quit early
 		if !bytes.Equal(inp, prefix[:i]) {
+			if p.required {
+				return errors.New("Prefix not found")
+			}
 			return nil
 		}
 	}
