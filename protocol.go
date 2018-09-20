@@ -59,7 +59,7 @@ type Conn struct {
 	conn               net.Conn
 	dstAddr            *net.TCPAddr
 	srcAddr            *net.TCPAddr
-	useConnRemoteAddr  bool
+	useConnAddr        bool
 	once               sync.Once
 	proxyHeaderTimeout time.Duration
 }
@@ -71,18 +71,18 @@ func (p *Listener) Accept() (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	var useConnRemoteAddr bool
+	var useConnAddr bool
 	if p.SourceCheck != nil {
 		allowed, err := p.SourceCheck(conn.RemoteAddr())
 		if err != nil {
 			return nil, err
 		}
 		if !allowed {
-			useConnRemoteAddr = true
+			useConnAddr = true
 		}
 	}
 	newConn := NewConn(conn, p.ProxyHeaderTimeout)
-	newConn.useConnRemoteAddr = useConnRemoteAddr
+	newConn.useConnAddr = useConnAddr
 	return newConn, nil
 }
 
@@ -128,12 +128,11 @@ func (p *Conn) Close() error {
 }
 
 func (p *Conn) LocalAddr() net.Addr {
-	return p.conn.LocalAddr()
-}
-
-func (p *Conn) DstAddr() net.Addr {
 	p.checkPrefixOnce()
-	return p.dstAddr
+	if p.dstAddr != nil && !p.useConnAddr {
+		return p.dstAddr
+	}
+	return p.conn.LocalAddr()
 }
 
 // RemoteAddr returns the address of the client if the proxy
@@ -145,7 +144,7 @@ func (p *Conn) DstAddr() net.Addr {
 // before Read()
 func (p *Conn) RemoteAddr() net.Addr {
 	p.checkPrefixOnce()
-	if p.srcAddr != nil && !p.useConnRemoteAddr {
+	if p.srcAddr != nil && !p.useConnAddr {
 		return p.srcAddr
 	}
 	return p.conn.RemoteAddr()
