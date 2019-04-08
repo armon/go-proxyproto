@@ -49,6 +49,7 @@ type Listener struct {
 	Listener           net.Listener
 	ProxyHeaderTimeout time.Duration
 	SourceCheck        SourceChecker
+	UnknownOK          bool // allow PROXY UNKNOWN
 }
 
 // Conn is used to wrap and underlying connection which
@@ -62,6 +63,7 @@ type Conn struct {
 	useConnAddr        bool
 	once               sync.Once
 	proxyHeaderTimeout time.Duration
+	unknownOK          bool
 }
 
 // Accept waits for and returns the next connection to the listener.
@@ -83,6 +85,7 @@ func (p *Listener) Accept() (net.Conn, error) {
 	}
 	newConn := NewConn(conn, p.ProxyHeaderTimeout)
 	newConn.useConnAddr = useConnAddr
+	newConn.unknownOK = p.UnknownOK
 	return newConn, nil
 }
 
@@ -209,18 +212,30 @@ func (p *Conn) checkPrefix() error {
 
 	// Split on spaces, should be (PROXY <type> <src addr> <dst addr> <src port> <dst port>)
 	parts := strings.Split(header, " ")
-	if len(parts) != 6 {
+	if len(parts) < 2 {
 		p.conn.Close()
 		return fmt.Errorf("Invalid header line: %s", header)
 	}
 
 	// Verify the type is known
 	switch parts[1] {
+	case "UNKNOWN":
+		if !p.unknownOK || len(parts) != 2 {
+			p.conn.Close()
+			return fmt.Errorf("Invalid UNKNOWN header line: %s", header)
+		}
+		p.useConnAddr = true
+		return nil
 	case "TCP4":
 	case "TCP6":
 	default:
 		p.conn.Close()
 		return fmt.Errorf("Unhandled address type: %s", parts[1])
+	}
+
+	if len(parts) != 6 {
+		p.conn.Close()
+		return fmt.Errorf("Invalid header line: %s", header)
 	}
 
 	// Parse out the source address

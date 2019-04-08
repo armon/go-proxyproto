@@ -245,6 +245,57 @@ func TestParse_ipv6(t *testing.T) {
 	}
 }
 
+func TestParse_Unknown(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	pl := &Listener{Listener: l, UnknownOK: true}
+
+	go func() {
+		conn, err := net.Dial("tcp", pl.Addr().String())
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+		defer conn.Close()
+
+		// Write out the header!
+		header := "PROXY UNKNOWN\r\n"
+		conn.Write([]byte(header))
+
+		conn.Write([]byte("ping"))
+		recv := make([]byte, 4)
+		_, err = conn.Read(recv)
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+		if !bytes.Equal(recv, []byte("pong")) {
+			t.Fatalf("bad: %v", recv)
+		}
+	}()
+
+	conn, err := pl.Accept()
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	defer conn.Close()
+
+	recv := make([]byte, 4)
+	_, err = conn.Read(recv)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if !bytes.Equal(recv, []byte("ping")) {
+		t.Fatalf("bad: %v", recv)
+	}
+
+	if _, err := conn.Write([]byte("pong")); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+}
+
 func TestParse_BadHeader(t *testing.T) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
