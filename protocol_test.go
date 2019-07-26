@@ -2,6 +2,7 @@ package proxyproto
 
 import (
 	"bytes"
+	"io"
 	"net"
 	"testing"
 	"time"
@@ -380,4 +381,54 @@ func testParse_ipv4_checkfunc(t *testing.T) {
 			t.Fatalf("bad: %v", addr)
 		}
 	}
+}
+
+type testConn struct {
+	readFromCalledWith io.Reader
+	net.Conn           // nil; crash on any unexpected use
+}
+
+func (c *testConn) ReadFrom(r io.Reader) (int64, error) {
+	c.readFromCalledWith = r
+	return 0, nil
+}
+func (c *testConn) Write(p []byte) (int, error) {
+	return len(p), nil
+}
+func (c *testConn) Read(p []byte) (int, error) {
+	return 1, nil
+}
+
+func TestCopyToWrappedConnection(t *testing.T) {
+	innerConn := &testConn{}
+	wrappedConn := NewConn(innerConn, 0)
+	dummySrc := &testConn{}
+
+	io.Copy(wrappedConn, dummySrc)
+	if innerConn.readFromCalledWith != dummySrc {
+		t.Error("Expected io.Copy to delegate to ReadFrom function of inner destination connection")
+	}
+}
+
+func TestCopyFromWrappedConnection(t *testing.T) {
+	wrappedConn := NewConn(&testConn{}, 0)
+	dummyDst := &testConn{}
+
+	io.Copy(dummyDst, wrappedConn)
+	if dummyDst.readFromCalledWith != wrappedConn.conn {
+		t.Errorf("Expected io.Copy to pass inner source connection to ReadFrom method of destination")
+	}
+}
+
+func TestCopyFromWrappedConnectionToWrappedConnection(t *testing.T) {
+	innerConn1 := &testConn{}
+	wrappedConn1 := NewConn(innerConn1, 0)
+	innerConn2 := &testConn{}
+	wrappedConn2 := NewConn(innerConn2, 0)
+
+	io.Copy(wrappedConn1, wrappedConn2)
+	if innerConn1.readFromCalledWith != innerConn2 {
+		t.Errorf("Expected io.Copy to pass inner source connection to ReadFrom of inner destination connection")
+	}
+
 }
