@@ -122,6 +122,22 @@ func (p *Conn) Read(b []byte) (int, error) {
 	return p.bufReader.Read(b)
 }
 
+func (p *Conn) ReadFrom(r io.Reader) (int64, error) {
+	if rf, ok := p.conn.(io.ReaderFrom); ok {
+		return rf.ReadFrom(r)
+	}
+	return io.Copy(p.conn, r)
+}
+
+func (p *Conn) WriteTo(w io.Writer) (int64, error) {
+	var err error
+	p.once.Do(func() { err = p.checkPrefix() })
+	if err != nil {
+		return 0, err
+	}
+	return p.bufReader.WriteTo(w)
+}
+
 func (p *Conn) Write(b []byte) (int, error) {
 	return p.conn.Write(b)
 }
