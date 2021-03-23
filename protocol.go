@@ -69,24 +69,30 @@ type Conn struct {
 // Accept waits for and returns the next connection to the listener.
 func (p *Listener) Accept() (net.Conn, error) {
 	// Get the underlying connection
-	conn, err := p.Listener.Accept()
-	if err != nil {
-		return nil, err
-	}
-	var useConnAddr bool
-	if p.SourceCheck != nil {
-		allowed, err := p.SourceCheck(conn.RemoteAddr())
+	for {
+		conn, err := p.Listener.Accept()
 		if err != nil {
 			return nil, err
 		}
-		if !allowed {
-			useConnAddr = true
+		var useConnAddr bool
+		if p.SourceCheck != nil {
+			allowed, err := p.SourceCheck(conn.RemoteAddr())
+			if err != nil {
+				if err == ErrInvalidUpstream {
+					conn.Close()
+					continue
+				}
+				return nil, err
+			}
+			if !allowed {
+				useConnAddr = true
+			}
 		}
+		newConn := NewConn(conn, p.ProxyHeaderTimeout)
+		newConn.useConnAddr = useConnAddr
+		newConn.unknownOK = p.UnknownOK
+		return newConn, nil
 	}
-	newConn := NewConn(conn, p.ProxyHeaderTimeout)
-	newConn.useConnAddr = useConnAddr
-	newConn.unknownOK = p.UnknownOK
-	return newConn, nil
 }
 
 // Close closes the underlying listener.
