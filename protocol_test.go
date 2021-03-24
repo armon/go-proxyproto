@@ -62,6 +62,10 @@ func TestPassthrough(t *testing.T) {
 	if _, err := conn.Write([]byte("pong")); err != nil {
 		t.Fatalf("err: %v", err)
 	}
+
+	if src, err := conn.(*Conn).ProxySourceAddr(); err == nil {
+		t.Fatalf("expected error on passthrough, but got nil and src %v", src)
+	}
 }
 
 func TestTimeout(t *testing.T) {
@@ -185,6 +189,13 @@ func TestParse_ipv4(t *testing.T) {
 	if addr.Port != 1000 {
 		t.Fatalf("bad: %v", addr)
 	}
+	src, err := conn.(*Conn).ProxySourceAddr()
+	if err != nil {
+		t.Fatalf("expected no error on proxy source addr: %v", err)
+	}
+	if src != addr {
+		t.Fatalf("expected addrs to match in working proxy case: %v != %v", src, addr)
+	}
 }
 
 func TestParse_ipv6(t *testing.T) {
@@ -244,6 +255,13 @@ func TestParse_ipv6(t *testing.T) {
 	if addr.Port != 1000 {
 		t.Fatalf("bad: %v", addr)
 	}
+	src, err := conn.(*Conn).ProxySourceAddr()
+	if err != nil {
+		t.Fatalf("expected no error on proxy source addr: %v", err)
+	}
+	if src != addr {
+		t.Fatalf("expected addrs to match in working proxy case: %v != %v", src, addr)
+	}
 }
 
 func TestParse_Unknown(t *testing.T) {
@@ -294,7 +312,13 @@ func TestParse_Unknown(t *testing.T) {
 	if _, err := conn.Write([]byte("pong")); err != nil {
 		t.Fatalf("err: %v", err)
 	}
-
+	src, err := conn.(*Conn).ProxySourceAddr()
+	if err != nil {
+		t.Fatalf("expected no error on proxy source addr for UNKNOWN: %v", err)
+	}
+	if src != nil {
+		t.Fatalf("expected src addr to be nil on UNKNOWN proxy: %v", src)
+	}
 }
 
 func TestParse_BadHeader(t *testing.T) {
@@ -335,6 +359,11 @@ func TestParse_BadHeader(t *testing.T) {
 	addr := conn.RemoteAddr().(*net.TCPAddr)
 	if addr.IP.String() != "127.0.0.1" {
 		t.Fatalf("bad: %v", addr)
+	}
+
+	// ProxySourceAddr should return the error
+	if _, err := conn.(*Conn).ProxySourceAddr(); err == nil {
+		t.Fatalf("expected an error when the proxy header was wrong")
 	}
 
 	// Read should fail
