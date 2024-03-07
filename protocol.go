@@ -160,6 +160,16 @@ func (p *Conn) LocalAddr() net.Addr {
 	return p.conn.LocalAddr()
 }
 
+// RealLocalAddr - this method always returns the LocalAddr() from the underlying conn
+func (p *Conn) RealLocalAddr() net.Addr {
+	return p.conn.LocalAddr()
+}
+
+// UnderlyingConn - this method returns the underlying net.Conn
+func (p *Conn) UnderlyingConn() net.Conn {
+	return p.conn
+}
+
 // RemoteAddr returns the address of the client if the proxy
 // protocol is being used, otherwise just returns the address of
 // the socket peer. If there is an error parsing the header, the
